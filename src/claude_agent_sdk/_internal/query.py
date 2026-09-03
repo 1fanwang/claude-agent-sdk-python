@@ -854,7 +854,11 @@ class Query:
             # If the read task already tore the stream down, its error wins.
             with suppress(anyio.ClosedResourceError):
                 await self._message_send.send(
-                    {"type": "error", "error": f"Error streaming input: {e}"}
+                    {
+                        "type": "error",
+                        "error": f"Error streaming input: {e}",
+                        "exception": e,
+                    }
                 )
 
     async def receive_messages(self) -> AsyncIterator[dict[str, Any]]:
@@ -864,6 +868,9 @@ class Query:
             if message.get("type") == "end":
                 break
             elif message.get("type") == "error":
+                exc = message.get("exception")
+                if isinstance(exc, Exception):
+                    raise exc
                 raise Exception(message.get("error", "Unknown error"))
 
             yield message

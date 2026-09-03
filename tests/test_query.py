@@ -309,7 +309,8 @@ class TestStringPromptWithSdkMcpServers:
 
         anyio.run(_test)
 
-    def test_streaming_prompt_input_stream_error_surfaces(self):
+    @pytest.mark.parametrize("backend", ["asyncio", "trio"])
+    def test_streaming_prompt_input_stream_error_surfaces(self, backend):
         """An exception raised by the caller's prompt AsyncIterable must
         surface to the consumer. Regression test: stream_input() swallowed
         the exception at debug level and returned without closing stdin, so
@@ -354,14 +355,16 @@ class TestStringPromptWithSdkMcpServers:
                 mock_cls.return_value = mock_transport
 
                 with anyio.fail_after(5):
-                    with pytest.raises(Exception, match="prompt generator exploded"):
+                    with pytest.raises(
+                        ValueError, match="prompt generator exploded"
+                    ):
                         async for _ in query(prompt=raising_stream()):
                             pass
 
             # The fix also closes stdin so the CLI can wind down cleanly.
             mock_transport.end_input.assert_called()
 
-        anyio.run(_test)
+        anyio.run(_test, backend=backend)
 
     def test_string_prompt_with_hooks_waits_for_result(self):
         """end_input() should wait for first result when hooks are configured,

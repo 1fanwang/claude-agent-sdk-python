@@ -205,15 +205,19 @@ async def test_cleanup_failure_does_not_swallow_asyncio_cancellation() -> None:
     )
     cleanup_started = asyncio.Event()
     fail_cleanup = asyncio.Event()
+    cleanup_error = RuntimeError("cleanup failed")
 
     async def failing_close() -> None:
         cleanup_started.set()
         await fail_cleanup.wait()
-        raise RuntimeError("cleanup failed")
+        raise cleanup_error
 
-    with patch.object(
-        transport, "_close_impl", side_effect=failing_close
-    ) as close_impl:
+    # Python 3.14 reports a failed shielded task to the loop even when close()
+    # later retrieves and chains that failure.
+    with (
+        patch.object(asyncio.get_running_loop(), "call_exception_handler") as handler,
+        patch.object(transport, "_close_impl", side_effect=failing_close) as close_impl,
+    ):
         close_task: asyncio.Task[None] = asyncio.create_task(transport.close())
         await cleanup_started.wait()
         close_task.cancel()
@@ -224,7 +228,11 @@ async def test_cleanup_failure_does_not_swallow_asyncio_cancellation() -> None:
             await close_task
 
     close_impl.assert_awaited_once()
-    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert raised.value.__cause__ is cleanup_error
+    assert all(
+        call.args[0].get("exception") is cleanup_error
+        for call in handler.call_args_list
+    )
 
 
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
@@ -235,11 +243,12 @@ async def test_cleanup_failure_does_not_break_asyncio_timeout() -> None:
     )
     cleanup_started = asyncio.Event()
     fail_cleanup = asyncio.Event()
+    cleanup_error = RuntimeError("cleanup failed")
 
     async def failing_close() -> None:
         cleanup_started.set()
         await fail_cleanup.wait()
-        raise RuntimeError("cleanup failed")
+        raise cleanup_error
 
     async def release_cleanup() -> None:
         await cleanup_started.wait()
@@ -249,12 +258,21 @@ async def test_cleanup_failure_does_not_break_asyncio_timeout() -> None:
     release_task = asyncio.create_task(release_cleanup())
     try:
         with (
+            patch.object(
+                asyncio.get_running_loop(), "call_exception_handler"
+            ) as handler,
             patch.object(transport, "_close_impl", side_effect=failing_close),
-            pytest.raises(TimeoutError),
+            pytest.raises(TimeoutError) as raised,
         ):
             await asyncio.wait_for(transport.close(), timeout=0.01)
     finally:
         await release_task
+    assert isinstance(raised.value.__cause__, asyncio.CancelledError)
+    assert raised.value.__cause__.__cause__ is cleanup_error
+    assert all(
+        call.args[0].get("exception") is cleanup_error
+        for call in handler.call_args_list
+    )
 
 
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])

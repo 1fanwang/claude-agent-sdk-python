@@ -946,6 +946,8 @@ class SubprocessCLITransport(Transport):
 
         Raw asyncio cancellation bypasses AnyIO shields, so cleanup runs in a
         separate task and the cancellation is re-raised after that task ends.
+        Caller timeouts do not bound this call because cleanup completes first;
+        full escalation may take about 20 seconds.
         """
         if sniffio.current_async_library() != "asyncio":
             await self._close_impl()
